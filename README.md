@@ -1,2 +1,2 @@
-# python_template
-Just a template file for generic, basic python scripts
+# hex-game-of-life
+It's like Conway's game of life, but with hexagons instead.
