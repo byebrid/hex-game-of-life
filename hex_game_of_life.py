@@ -39,20 +39,74 @@ logger.info(msg=f"Started running {name_of_script}")
 class Grid():
     def __init__(self, width, height, r):
         self.window = tk.Tk()
-        self.canvas = tk.Canvas(self.window, width=width, height=height)
+
+        # Separate window into two frames
+        self.top_frame = tk.Frame(self.window).pack()
+        self.bottom_frame = tk.Frame(self.window).pack()
+
+        # Adding canvas to top frame
+        self.canvas = tk.Canvas(self.top_frame, width=width, height=height)
         self.canvas.pack()
         self.canvas.update()
 
+        # Keeping track of if currently animating or not
+        self.running = False
+
+        # Adding button which will start/stop animation (its text can change!)
+        self.start_stop_button = tk.Button(self.bottom_frame, text="Start", 
+            command=self.start_stop)
+        self.start_stop_button.pack(side=tk.LEFT)
+
+        # Button to randomise states of hexagons
+        self.randomise_button = tk.Button(self.bottom_frame, text="Randomise", 
+            command=self.randomise).pack(side=tk.LEFT)
+
+        # 'Radius' of hexagons in Grid
         self.r = r
 
+        # Dict where we will store all hexagons in Grid
         self.hexes = {}
 
         self.init_draw()
 
+        self.window.mainloop()
+
+    def init_draw(self):
+        """To be used in self.__init__(). Draws grid of dead hexagons to start 
+        off with.
+        """
+        for y in range(self.max_y_coord + 1):
+            for x in range(self.max_x_coord + 1):
+                self.hexes[(x, y)] = Hexagon(grid=self, x=x, y=y)
+
+    def start_stop(self):
+        if self.running == False:
+            self.animate()
+        elif self.running == True:
+            self.stop()
+
+    def animate(self, n=1000):
+        """Animates the grid.
+        
+        Parameters
+        ----------
+        n: int; default=1000
+            Number of frames to animate.
+        """
+        self.running = True
+        self.start_stop_button.configure(text="Stop")
+        # In case any cells have changed states
+        self.refresh_neighbour_counts()
+        while n >= 0 and self.running:
+            self.update()
+            n -= 1
+        print("We need to fix this, because it seems to stay open when stopped")
+
     def update(self):
+        """Updates self by one frame according to the game's logic."""
         altered_hexes = []
         for hex in self.hexes.values():
-            count = hex.live_neighbours_count()
+            count = hex.count
             if (count < 2 or count > 3) and hex.state == 1:
                 altered_hexes.append(hex)
             elif count == 3 and hex.state == 0:
@@ -60,50 +114,27 @@ class Grid():
         
         for hex in altered_hexes:
             hex.switch_state()
+
         self.canvas.update()
 
-    def animate(self, n=1000):
-        while n >= 0:
-            self.update()
-            n -= 1
-
-
-    @property
-    def max_x_coord(self):
-        l = Hexagon.get_second_r(r=self.r)
-        return int(self.canvas.winfo_width() / (2 * l) - 1)
-
-    @property
-    def max_y_coord(self):
-        l = Hexagon.get_second_r(r=self.r)
-        
-        def total_height(y_coord):
-            return self.r * (2 + y_coord) + y_coord * 0.5 * l
-        
-        y = 0
-        while total_height(y) <= self.canvas.winfo_height():
-            y += 1
-        return y
-
-    def init_draw(self):
-        for y in range(self.max_y_coord + 1):
-            for x in range(self.max_x_coord + 1):
-                self.hexes[(x, y)] = Hexagon(grid=self, x=x, y=y)
-
-    def switch_state(self, x, y):
-        self.hexes[(x, y)].switch_state()
-
-    def set_random_states(self, p=0.1):
+    def randomise(self, p=0.4):
         """Randomly sets hexes to being alive.
 
-        Note: Actually calls switch_state() so cell will become dead if it was
-        previously alive.
+        Parameters
+        ----------
+        p: floats between 0 & 1, inclusive; default=0.1
+            Probability any given hexagon is set to be alive. Note this is not
+            neccessarily equivalent to the exact proportion of hexagons in Grid
+            that will become alive.
         """
+        self.stop()
         for hex in self.hexes.values():
             dice_roll = random.random()
             if dice_roll <= p:
-                hex.switch_state()
-        
+                hex.state = 1
+            else:
+                hex.state = 0
+
     def wrap_coords(self, x, y):
         """Returns tuple of wrapped coordinates"""
         if x > self.max_x_coord:
@@ -121,6 +152,32 @@ class Grid():
 
         return (new_x, new_y)
 
+    def stop(self):
+        self.running = False
+        self.start_stop_button.configure(text="Start")
+
+    def refresh_neighbour_counts(self):
+        for hex in self.hexes.values():
+            hex.refresh_neighbour_count()
+
+    @property
+    def max_x_coord(self):
+        l = Hexagon.get_second_r(r=self.r)
+        return int(self.canvas.winfo_width() / (2 * l) - 1)
+
+    @property
+    def max_y_coord(self):
+        # God I need to change this
+        l = Hexagon.get_second_r(r=self.r)
+        
+        def total_height(y_coord):
+            return self.r * (2 + y_coord) + y_coord * 0.5 * l
+        
+        y = 0
+        while total_height(y) <= self.canvas.winfo_height():
+            y += 1
+        return y        
+
 
 class Hexagon():
     """A hexagon which is drawn on the given Grid object.
@@ -137,10 +194,11 @@ class Hexagon():
         self.y = y
         self.grid = grid
         self.r = grid.r
-        self.state = state
         self.canvas = grid.canvas
-
         self.item_handle = self.init_draw()
+        self.count = 0
+
+        # self.state = state
 
     def __repr__(self):
         return f"Hexagon{self.x, self.y, self.state}"
@@ -157,6 +215,41 @@ class Hexagon():
         
         return self.canvas.create_polygon(*points, fill="white", outline="black")
 
+    def refresh_neighbour_counts(self):
+        for hex in self.hexes.values():
+            hex.refresh_neighbour_count()
+
+    @property
+    def state(self):
+        try:
+            return self.__state
+        except AttributeError:
+            # Defaults to 0
+            self.__state = 0
+            return self.__state
+
+    @state.setter
+    def state(self, new_state):
+        # Get current state, then set to `new_state`
+        current_state = self.state
+        self.__state = new_state
+        fill_colour = None
+        increment = 0
+        if new_state == 1 and current_state == 0:
+            fill_colour = "black"
+            increment = 1
+        elif new_state == 0 and current_state == 1:
+            fill_colour = "white"
+            increment = -1
+
+        # Update neighbours `count`s
+        for neighbour in self.neighbours:
+            neighbour.count += increment
+
+        # Colour in hexagon if needed
+        if fill_colour:
+            self.canvas.itemconfig(self.item_handle, fill=fill_colour)
+
     def switch_state(self):
         """Switches state from dead to alive and vice versa"""
         if self.state == 0:
@@ -167,6 +260,9 @@ class Hexagon():
             fill_colour = "white"
         
         self.canvas.itemconfig(self.item_handle, fill=fill_colour)
+
+    def refresh_neighbour_count(self):
+        self.count = sum([n.state for n in self.neighbours])
 
     @property
     def second_r(self):
@@ -198,7 +294,7 @@ class Hexagon():
         """
         x, y = self.x, self.y
         if y % 2 == 0:
-            neighbours = [
+            neighbour_indices = [
                 (x-1, y  ),
                 (x  , y-1),
                 (x  , y+1),
@@ -207,7 +303,7 @@ class Hexagon():
                 (x+1, y+1)
             ]
         else:
-            neighbours = [
+            neighbour_indices = [
                 (x-1, y-1),
                 (x-1, y  ),
                 (x-1, y+1),
@@ -215,18 +311,9 @@ class Hexagon():
                 (x  , y+1),
                 (x+1, y  )
             ]
-        
-        return neighbours
 
-    def live_neighbours_count(self):
-        """Returns how many adjacent hexagons are alive"""
-        count = 0
-        for x, y in self.neighbours:
-            new_x, new_y = self.grid.wrap_coords(x, y)
-            neighbour_state = self.grid.hexes[(new_x, new_y)].state
-            count += neighbour_state
-
-        return count
+        # Gets references to Hexagons in grid, wrapping coords if neccessary
+        return [self.grid.hexes[self.grid.wrap_coords(*i)] for i in neighbour_indices]
 
     @staticmethod
     def get_second_r(r):
@@ -239,8 +326,6 @@ class Hexagon():
 
 
 grid = Grid(width=1080, height=720, r=40)
-grid.set_random_states(p=0.5)
-grid.animate()
 
 ############################## MAIN CODE ENDS HERE ##############################
 logger.info(msg=f"Finished running {os.path.basename(__file__)}")
