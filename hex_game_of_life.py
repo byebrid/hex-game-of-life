@@ -4,10 +4,16 @@ Author: Byebrid
 
 It's like Conway's game of life, but with a hexagonal grid instead!
 
+
 Example
 -----
 >>> grid = Grid(width=500, height=500, r=20)
-# And you're all good to go!
+And you're all good to go!
+
+Possible changes
+-----
+- Make it so we can adjust r value while in the GUI.
+- Make it so resizing the screen readjusts all the frames, etc.
 """
 import os
 import logging
@@ -33,19 +39,102 @@ logger.addHandler(file_handler)
 logger.info(msg=f"Started running {name_of_script}")
 ############################# MAIN CODE STARTS HERE #############################
 
+COLOUR_SCHEMES = {
+    'Default': {
+        'alive': 'black',
+        'dead': 'white'
+    },
+    'Christmas': {
+        'alive': '#d92726', # red
+        'dead': '#66b649' # green
+    },
+    'Neon': {
+        'alive': 'green',
+        'dead': 'black'
+    },
+    'Dark': {
+        'alive': 'gray',
+        'dead': 'black'
+    },
+    'Greenish purple': {
+        'alive': '#9949B6', # purple
+        'dead': '#66b649' # green
+    }
+}
+
+
 class Grid():
     def __init__(self, width, height, r):
         """Sets up the window and all its frames, as well as drawing all the 
         Hexagons on the canvas, and calling mainloop() to keep window open."""
-        self.window = tk.Tk()
+        # Keeping track of if currently animating or not
+        self.running = False
+    
+        # 'Radius' of hexagons in Grid
+        self.r = r
 
+        # Dict where we will store all hexagons in Grid
+        self.hexes = {}
+
+        # Set up window, make widgets and draw the grid of Hexagons to canvas
+        self.window = tk.Tk()
+        self.window.title("Lex's Hexagonal Game of Life")
+        self.make_widgets(width=width, height=height)
+        self.init_draw()
+
+        self.window.mainloop()
+
+    def make_widgets(self, width, height):
+        """Makes:
+        - Menubar with colour theme selection
+        - Display of count of living Hexagons
+        - Main canvas
+        - Start/stop button
+        - Randomise button (with adjustable probability)
+        - Clear button
+        - Checkbox to hide/show neighbour counts
+        - Framerate limit entry field
+
+        Important things this func creates (also creates others):
+        - self.canvas
+        - self.top_frame, mid_frame, bottom_frame, centre_top_frame
+        - self.colour_scheme
+        - self.canvas_init_width
+        - self.canvas_init_height
+        - self.randomise_p
+        - self.fr_limit
+        - self.do_show_count
+        """
         # Separate window into two frames
         self.top_frame = tk.Frame(self.window)
-        self.top_frame.pack()
-        self.mid_frame = tk.Frame(self.window).pack()
-        self.bottom_frame = tk.Frame(self.window).pack()
+        self.top_frame.pack(side=tk.TOP)
+        self.mid_frame = tk.Frame(self.window)
+        self.mid_frame.pack()
+        self.bottom_frame = tk.Frame(self.window)
+        self.bottom_frame.pack(side=tk.BOTTOM)
 
         ############# TOP FRAME #############
+        def change_colour_scheme():
+            self.refresh_fills()
+            self.refresh_texts()
+
+        self.menubar = tk.Menu(self.window)
+        self.colour_scheme = tk.StringVar()
+        self.colour_scheme.set('Default')       
+
+        self.colour_menu = tk.Menu(self.menubar, tearoff = 0)
+        for colour_scheme in COLOUR_SCHEMES.keys():
+            self.colour_menu.add_radiobutton(
+                label=colour_scheme,
+                variable=self.colour_scheme,
+                value=colour_scheme,
+                command=change_colour_scheme
+                )
+
+        self.colour_menu.add_separator()
+        self.menubar.add_cascade(label="Colour", menu = self.colour_menu)
+        self.window.config(menu=self.menubar)
+
         # To centre multiple widgets in self.top_frame, put them in their own frame
         self.centre_top_frame = tk.Frame(master=self.top_frame)
         tk.Label(master=self.centre_top_frame, text="Number of alive hexagons:",
@@ -66,29 +155,36 @@ class Grid():
         self.canvas_init_height = self.canvas.winfo_height()
 
         ############# BOTTOM FRAME #############
-        # Keeping track of if currently animating or not
-        self.running = False
-
         # Creating button to start/stop animation
         self.start_stop_text = tk.StringVar()
         self.start_stop_text.set("Start")
-        self.start_stop_button = tk.Button(self.bottom_frame, 
+        tk.Button(self.bottom_frame, 
             textvariable=self.start_stop_text,
-            command=self.start_stop)
-        self.start_stop_button.pack(side=tk.LEFT)
+            command=self.start_stop).pack(side=tk.LEFT)
 
-        # Button to randomise states of hexagons
-        self.randomise_button = tk.Button(self.bottom_frame, text="Randomise", 
+        # Button + Entry for probability to randomise states of hexagons
+        tk.Button(self.bottom_frame, 
+            text="Randomise", 
             command=self.randomise).pack(side=tk.LEFT)
+        tk.Label(self.bottom_frame, text="Probability: ").pack(side=tk.LEFT)
+        self.randomise_p = tk.Scale(
+            self.bottom_frame, 
+            from_=0, to=1,
+            resolution=0.01, 
+            orient=tk.HORIZONTAL,
+            )
+        self.randomise_p.pack(side=tk.LEFT)
+        # Default p=0.4
+        self.randomise_p.set(0.4)
 
         # Button to reset grid to empty/all dead
-        self.clear_button = tk.Button(self.bottom_frame, 
+        tk.Button(self.bottom_frame, 
             text="Clear",
             command=self.clear).pack(side=tk.LEFT)
 
         # Button to toggle whether to show live neighbour counts of hexagons
         self.do_show_count = tk.BooleanVar()
-        self.show_count_button = tk.Checkbutton(
+        tk.Checkbutton(
             master=self.bottom_frame,
             text="Show count",
             variable=self.do_show_count,
@@ -97,23 +193,15 @@ class Grid():
 
         # Framerate limit Entry field
         self.fr_limit = tk.DoubleVar()
-        self.fr_entry = tk.Entry(textvariable=self.fr_limit)
+        self.fr_entry = tk.Entry(self.bottom_frame, 
+            textvariable=self.fr_limit,
+            width=6)
         self.fr_entry.pack(side=tk.RIGHT)
         # Default to 5 frames/sec
         self.fr_limit.set(5)
 
         # Frame rate limit label
         tk.Label(self.bottom_frame, text="Framerate Limit: ").pack(side=tk.RIGHT)
-
-        # 'Radius' of hexagons in Grid
-        self.r = r
-
-        # Dict where we will store all hexagons in Grid
-        self.hexes = {}
-
-        self.init_draw()
-
-        self.window.mainloop()
 
     def init_draw(self):
         """To be used in self.__init__(). Draws grid of dead hexagons to start 
@@ -152,7 +240,7 @@ class Grid():
             if end - start < delay:
                 time.sleep(delay - (end-start)) # stops input annoyingly
 
-    def randomise(self, p=0.4):
+    def randomise(self):
         """Randomly sets hexes to being alive.
 
         Parameters
@@ -165,7 +253,7 @@ class Grid():
         self.stop()
         for hex in self.hexes.values():
             dice_roll = random.random()
-            if dice_roll <= p:
+            if dice_roll <= self.randomise_p.get():
                 hex.state = 1
             else:
                 hex.state = 0
@@ -224,6 +312,11 @@ class Grid():
         """Stops animation and resets text on start/stop button."""
         self.start_stop_text.set("Start")
         self.running = False
+
+    def refresh_fills(self):
+        """Resets fills of all Hexagons in Grid"""
+        for hex in self.hexes.values():
+            hex.refresh_fill()
 
     def refresh_neighbour_counts(self):
         """Refreshed all Hexagons' live neighbour counts in case they may have
@@ -301,7 +394,6 @@ class Hexagon():
         self.canvas = grid.canvas
         self.item_handle, self.text = self.init_draw()
         self.count = 0 # The number of neighbours that are alive
-        self.refresh_text()
 
     def __repr__(self):
         return f"Hexagon{self.x, self.y, self.state}"
@@ -343,10 +435,16 @@ class Hexagon():
 
         return (item_handle, label)
 
-    def refresh_neighbour_counts(self):
-        """Resets the `count`s of all hexes."""
-        for hex in self.hexes.values():
-            hex.refresh_neighbour_count()
+    def refresh_fill(self):
+        """Refreshes fill of Hexagon based on colour scheme."""
+        if self.state == 1:
+            fill_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['alive']
+            outline_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['dead']
+        elif self.state == 0:
+            fill_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['dead']
+            outline_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['alive']
+        
+        self.canvas.itemconfig(self.item_handle, fill=fill_colour, outline=outline_colour)
 
     def refresh_text(self):
         """Refreshes the label showing how many live neighbours there are.
@@ -358,9 +456,9 @@ class Hexagon():
         if self.grid.do_show_count.get() == False:
             label_colour = ""
         elif self.state == 0:
-            label_colour = "black"
+            label_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['alive']
         elif self.state == 1:
-            label_colour = "white"
+            label_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['dead']
     
         self.canvas.itemconfig(self.text, fill=label_colour, text=self.count)
 
@@ -386,12 +484,12 @@ class Hexagon():
         fill_colour = None
         increment = 0
         if new_state == 1 and current_state == 0:
-            fill_colour = "black"
-            label_colour = "white"
+            fill_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['alive']
+            label_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['dead']
             increment = 1
         elif new_state == 0 and current_state == 1:
-            fill_colour = "white"
-            label_colour = "black"
+            fill_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['dead']
+            label_colour = COLOUR_SCHEMES[self.grid.colour_scheme.get()]['alive']
             increment = -1
 
         # Update global living count
@@ -403,7 +501,7 @@ class Hexagon():
 
         # Colour in hexagon if needed
         if fill_colour:
-            self.canvas.itemconfig(self.item_handle, fill=fill_colour)
+            self.canvas.itemconfig(self.item_handle, fill=fill_colour, outline=label_colour)
             self.refresh_text()
 
     def switch_state(self):
@@ -477,7 +575,8 @@ class Hexagon():
         return sqrt((r - cos(a))**2 + (0 - sin(a))**2)
 
 
-grid = Grid(width=720, height=480, r=20)
+if __name__ == '__main__':
+    grid = Grid(width=500, height=500, r=25)
 
 ############################## MAIN CODE ENDS HERE ##############################
 logger.info(msg=f"Finished running {os.path.basename(__file__)}")
