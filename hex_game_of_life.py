@@ -20,7 +20,9 @@ import tkinter as tk
 from math import cos, sin, floor, sqrt, pi
 import random
 import time
-from threading import Thread
+import threading
+import queue
+import concurrent.futures
 
 # Change cwd to that of script
 path_to_script = os.path.abspath(__file__)
@@ -84,7 +86,7 @@ class Grid():
         self.make_widgets()
         self.canvas.update()
         self.draw_grid()
-        
+
         self.window.mainloop()
 
     def resize_grid(self):
@@ -127,7 +129,7 @@ class Grid():
         """
         # Separate window into two frames
         self.top_frame = tk.Frame(self.window)
-        self.top_frame.pack(side=tk.TOP)
+        self.top_frame.pack(side=tk.TOP, fill=tk.X)
         self.bottom_frame = tk.Frame(self.window)
         self.bottom_frame.pack(side=tk.BOTTOM)
         self.mid_frame = tk.Frame(self.window)
@@ -155,10 +157,39 @@ class Grid():
         tk.Label(master=self.centre_top_frame, text="Number of alive hexagons:",
             ).pack(side=tk.LEFT)
         self.living_count = tk.IntVar()
-        self.living_label = tk.Label(master=self.centre_top_frame, 
-            textvariable=self.living_count,)
-        self.living_label.pack(side=tk.LEFT)
+        tk.Label(master=self.centre_top_frame, 
+            textvariable=self.living_count).pack(side=tk.LEFT)
         self.centre_top_frame.pack()
+
+        # Help text
+        def help_box():
+            help_window = tk.Toplevel(self.window)
+            help_window.maxsize(width=600, height=0)
+            help_str = (
+                "This is my take on Conway's game of life. It replaces "
+                "the classic square grid with a Hexagonal version. The rules of "
+                "the system are simple:\n"
+                "1) If a cell is 'alive' and it has <2 "
+                "or >3 live cells around it, then it dies    as of under/over-population.\n"
+                "2) If a cell is 'dead' and it has exactly 3 live neighbours, "
+                "then it comes to    life.\n\nClick on a Hexagon to switch its state "
+                "or use the Randomise button with the selected probability below to "
+                "randomly select hexagons to become alive.\n"
+                "If you adjust the window's size, you can fix up the grid with the "
+                "Resize button.\nChange the hexagons' 'radii' with the 'r' slider.\n"
+                "Change the colour scheme in the menu at the top of the screen (if "
+                "on Mac OS)."
+            )
+            scrollbar = tk.Scrollbar(help_window)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+            help_text = tk.Text(help_window, yscrollcommand=scrollbar.set, wrap=tk.WORD)
+            help_text.insert(tk.END, help_str)
+            help_text.pack()
+
+            scrollbar.config(command=help_text.yview)
+
+        tk.Button(master=self.top_frame, text="Help", command=help_box).pack(side=tk.RIGHT)
 
         ############# MID FRAME #############
         # Adding canvas to mid frame
@@ -259,18 +290,13 @@ class Grid():
             self.stop()
 
     def animate(self):
-        """Animates the grid.
-        
-        Parameters
-        ----------
-        n: int; default=1000
-            Number of frames to animate.
-        """
+        """Animates the grid."""
         self.running = True
         self.toggle_animation_text.set("Stop")
 
         # Getting duration of each frame at framerate
         expected_frame_length = 1 / self.fr_limit.get()
+
         # In case any cells have changed states
         while self.running:
             frame_start = time.time()
@@ -292,7 +318,7 @@ class Grid():
         ----------
         p: floats between 0 & 1, inclusive; default=0.1
             Probability any given hexagon is set to be alive. Note this is not
-            neccessarily equivalent to the exact proportion of hexagons in Grid
+            necessarily equivalent to the exact proportion of hexagons in Grid
             that will become alive.
         """
         self.stop()
@@ -320,7 +346,7 @@ class Grid():
         else:
             for hex in altered_hexes:
                 hex.switch_state()
-     
+
         self.canvas.update()
 
     def wrap_coords(self, x, y):
@@ -391,16 +417,22 @@ class Grid():
     @property
     def max_y_coord(self):
         """The maximum allowable y coordinate of a Hexagon on this Grid. Note,
-        this is NOT the maximum pixel coordinate."""
-        # God I need to change this
+        this is NOT the maximum pixel coordinate.
+        
+        How it's calculated
+        -------------------
+        Total height for n canvases given by:
+            t0 = 2r
+            d = 0.5l + r
+            Therefore,
+            tn = 2r + n(0.5l + r)
+            Therefore,
+            n = (tn - 2r) ÷ (0.5l + r)
+        """
+        r = self.r.get()
         l = Hexagon.get_second_r(r=self.r.get())
-        
-        def total_height(y_coord):
-            return self.r.get() * (2 + y_coord) + y_coord * 0.5 * l
-        
-        y = 0
-        while total_height(y) <= self.canvas.winfo_height():
-            y += 1
+        h = self.canvas.winfo_height()
+        y = floor((h - 2*r) / (0.5*l + r))
 
         # Prevents error when wrapping coordinates vertically. Imagine you have
         # 3 rows. The bottom row will take up the same horizontal positions as
@@ -470,7 +502,6 @@ class Hexagon():
         self.refresh_fill() # In case of different colour scheme
 
         # Draw text displaying live neighbour count and also bind it
-        # text must start as blank since not all neighbours will have been created yet
         self.text_handle = self.canvas.create_text((self.pixel_x, self.pixel_y), text="")
         self.canvas.tag_bind(self.text_handle, '<Button-1>', switch_state_cb)
         # In case text should be displayed (for Hexagons created after __init__)
@@ -545,9 +576,6 @@ class Hexagon():
         for neighbour in self.neighbours:
             neighbour.count += increment
             neighbour.refresh_text() # Needed to ensure accurate counts for all Hexes
-            if neighbour.count < 0: # For debugging (oh no zombie code)
-                print("Neighbour now has negative count?")
-                self.grid.stop()
 
     def switch_state(self):
         """Switches state from dead to alive and vice versa"""
@@ -600,7 +628,7 @@ class Hexagon():
                 (x+1, y  )
             ]
 
-        # Gets references to Hexagons in grid, wrapping coords if neccessary
+        # Gets references to Hexagons in grid, wrapping coords if necessary
         return [self.grid.hexes[self.grid.wrap_coords(*i)] for i in neighbour_indices]
 
     def is_out_of_bounds(self):
@@ -626,7 +654,6 @@ class Hexagon():
             return (dead, alive)
         elif self.state == 1:
             return (alive, dead)
-    
 
 
 if __name__ == '__main__':
